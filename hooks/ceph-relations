@@ -3,57 +3,52 @@
 set -uex
 
 name=`basename $0`
-relation=${name%%-relation-*}
-event=${name##*-relation-}
+if [ "$name" = "config-changed" ] ; then
+    relation="config-changed"
+    event="config-changed"
+else
+    relation=${name%%-relation-*}
+    event=${name##*-relation-}
+fi
 
-generate_osd_conf() {
-    new_osd_config=`mktemp /etc/ceph/.osd.conf.partial.XXXXXXXX`
-    myaddr=`unit-get private-address`
-    for unit in `relation-list` ; do
-        id=`echo $unit | cut -d/ -f2` 
-        if [ "`relation-get private-address $unit`" = "$myaddr" ] ; then
-            myid=$id
-        fi
-        cat >> $new_osd_config <<EOF
+# this is used to determine ids from the configs, so it does need
+# to be hostname and not private-address
+HOSTNAME=`hostname`
 
-[osd.$id]
-    host = `unit-get private-address`
-
-EOF
-    done
-
-    mkdir -p /mnt/osd$myid
-    swap_config /etc/ceph/osd.conf.partial $new_osd_config
+send_ssh_key() {
+    if [ ! -f "/root/.ssh/id_rsa" ] ; then
+        ssh-keygen -q -N '' -t rsa -b 2048 -f /root/.ssh/id_rsa
+    fi
+    relation-set ssh-key="`cat /root/.ssh/id_rsa.pub`"
 }
 
-generate_mds_conf() {
-    new_mds_config=`mktemp /etc/ceph/.mon.conf.partial.XXXXXX`
-    for unit in `relation-list` ; do
-        id=`echo $unit | cut -d/ -f2`
-        cat >> $new_mds_config <<EOF
+if [ "$event" = "joined" ] ; then
+    case $relation in
+    ssh)
+        send_ssh_key
+        ;;
+    *)
+        relation-set hostname=`hostname`
+    ;;
+    esac
+fi
 
-[mds.$id]
-    host=`relation-get private-address $unit`
-
-EOF
-    done
-    swap_config /etc/ceph/mds.conf.partial $new_mds_config
-}
-
-generate_mon_conf() {
-    new_mon_config=`mktemp /etc/ceph/.mon.conf.partial.XXXXXX`
-    for unit in `relation-list` ; do
-        id=`echo $unit | cut -d/ -f2`
-        cat >> $new_mon_config <<EOF
-
-[mon.$id]
-    host=`relation-get private-address $unit`
-    mon addr = `relation-get private-address $unit`:6789
-
-EOF
-    done
-    swap_config /etc/ceph/mon.conf.partial $new_mon_config
-}
+case $relation in
+config-changed)
+    ;;
+ssh)
+    if [ -z "`relation-get ssh-key`" ] ; then
+        juju-log "ssh-key not set yet"
+        exit 0
+    fi
+    ;;
+*)
+    if [ -z "`relation-get hostname`" ] ; then
+        juju-log "hostname not set yet"
+        exit 0
+    fi
+    ;;
+esac
 
 swap_config() {
     old=$1
@@ -64,6 +59,109 @@ swap_config() {
     mv $new $old
 }
 
+generate_osd_conf() {
+    new_osd_config=`mktemp /etc/ceph/.osd.conf.partial.XXXXXXXX`
+    for unit in $JUJU_UNIT_NAME `relation-list` ; do
+        id=`echo $unit | cut -d/ -f2` 
+        if [ "$unit" = "$JUJU_UNIT_NAME" ] ; then
+            host=$HOSTNAME
+        else
+            host=`relation-get hostname $unit`
+        fi
+        cat >> $new_osd_config <<EOF
+
+[osd.$id]
+    host = $host
+
+EOF
+    done
+
+    myid=`echo $JUJU_UNIT_NAME | cut -d/ -f2`
+    mkdir -p /mnt/osd$myid
+    swap_config /etc/ceph/osd.conf.partial $new_osd_config
+}
+
+generate_mds_conf() {
+    new_mds_config=`mktemp /etc/ceph/.mon.conf.partial.XXXXXX`
+    for unit in $JUJU_UNIT_NAME `relation-list` ; do
+        id=`echo $unit | cut -d/ -f2`
+        if [ "$unit" = "$JUJU_UNIT_NAME" ] ; then
+            host=$HOSTNAME
+        else
+            host=`relation-get hostname $unit`
+        fi
+        cat >> $new_mds_config <<EOF
+
+[mds.$id]
+    host=$host
+
+EOF
+    done
+    swap_config /etc/ceph/mds.conf.partial $new_mds_config
+}
+
+generate_mon_conf() {
+    new_mon_config=`mktemp /etc/ceph/.mon.conf.partial.XXXXXX`
+    for unit in $JUJU_UNIT_NAME `relation-list` ; do
+        id=`echo $unit | cut -d/ -f2`
+        if [ "$unit" = "$JUJU_UNIT_NAME" ] ; then
+            host=$HOSTNAME
+            addr=`unit-get private-address`
+        else
+            host=`relation-get hostname $unit`
+            addr=`relation-get private-address $unit`
+        fi
+        cat >> $new_mon_config <<EOF
+
+[mon.$id]
+    host=$host
+    mon addr = $addr
+
+EOF
+    done
+
+    myid=`echo $JUJU_UNIT_NAME | cut -d/ -f2`
+    mkdir -p /mnt/mon$myid
+    swap_config /etc/ceph/mon.conf.partial $new_mon_config
+}
+
+save_ssh_key() {
+    mkdir -p /etc/ceph/ssh-keys
+    unit_name=`echo $JUJU_REMOTE_UNIT|sed -e 's,/,-,g'`
+    key=`relation-get ssh-key`
+    if [ -n "$key" ] ; then
+        echo $key > /etc/ceph/ssh-keys/$unit_name
+    fi
+}
+
+set_permit_root_login() {
+    new_value=$1
+    sed -i -e "s/^PermitRootLogin .*$/PermitRootLogin $new_value/" /etc/ssh/sshd_config
+    # Make sure we didn't hose the configs
+    /usr/sbin/sshd -t
+    service ssh reload
+}
+
+regen_ssh_config() {
+    root_ssh=`config-get root-ssh`
+    if [ ! "$root_ssh" = "yes" ] ; then
+        rm -f /root/.ssh/authorized_keys
+        set_permit_root_login no
+        return
+    fi
+    [ -d /etc/ceph/ssh-keys ] || return
+    mkdir -p /root/.ssh
+    chmod 600 /root/.ssh
+    new_keys=`mktemp /root/.ssh/.new_auth_keys.XXXXXX`
+    touch $new_keys
+    chmod 600 $new_keys
+    for key in `ls /etc/ceph/ssh-keys` ; do
+        cat /etc/ceph/ssh-keys/$key >> $new_keys
+    done
+    swap_config /root/.ssh/authorized_keys $new_keys
+    set_permit_root_login yes
+}
+    
 new_config=`mktemp /etc/ceph/.new-config.XXXXX`
 
 # If I am the "master", make sure we have .ssh/id_xxx keys for all slaves
@@ -76,10 +174,10 @@ cat > $new_config <<EOF
     auth supported = cephx
 
 [mon]
-    mon data = /data/mon\$id
+    mon data = /mnt/mon\$id
 
 [mds]
-    keyring = /data/keyring.\$name
+    keyring = /mnt/keyring.\$name
 
 [osd]
     osd data = /mnt/osd\$id
@@ -89,6 +187,11 @@ cat > $new_config <<EOF
 EOF
 
 case $relation in
+config-changed)
+    ;;
+ssh|ssh-remote)
+    save_ssh_key
+    ;;
 mds)
     generate_mds_conf
     ;;
@@ -103,6 +206,7 @@ mon)
     ;;
 esac
     
+regen_ssh_config
 
 for i in mon mds osd ; do
     if [ -f /etc/ceph/$i.conf.partial ] ; then
@@ -112,6 +216,4 @@ done
 
 swap_config /etc/ceph/ceph.conf $new_config
 
-service ceph status || service ceph start
-
-exit 0
+service ceph restart || juju-log "Service could not be started"

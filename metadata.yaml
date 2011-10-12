@@ -8,7 +8,15 @@ description: |
 provides:
   ceph-fs:
     interface: mount
+requires:
+  ssh-client:
+    interface: root-ssh
+provides:
+  ssh-remote:
+    interface: root-ssh
 peers:
+  ssh:
+    interface: root-ssh
   osd:
     interface: ceph-osd
   mds:

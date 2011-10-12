@@ -1,0 +1,29 @@
+This is a rudimentary start at a workable elastic ceph charm.
+
+To deploy, simply deploy it as a service, and add units. All nodes will
+run all components of CEPH currently (mds, osd, and mon).  This means
+you should not try to use the cluster until it has reached an odd number
+of machines.
+
+Once the units are all deployed, use
+
+juju set name-of-service root-ssh=yes
+
+Then ssh to any of the service units and run
+
+sudo mkcephfs -a -c /etc/ceph/ceph.conf
+
+It should create a ceph filesystem with data stored on each node in
+/mnt. On EC2 instances, this is automatically a large ephemeral drive,
+and should perform reasonably well.
+
+After you are done, you can improve security by turning off the root ssh,
+which is only used for mkcephfs, with:
+
+juju set name-of-service root-ssh=no
+
+Once done, one should be able to mount the ceph filesystem using any of
+the service unit IP's.
+
+XXX at the time of this writing, mounting stalls out on my local LXC
+containers that I am using for prototyping.
