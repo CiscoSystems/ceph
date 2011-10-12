@@ -1,0 +1,5 @@
+options:
+    osd-journal-size:
+        type: string
+        default: 512
+        description: Size of each node's OSD journal in Megabytes

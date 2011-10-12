@@ -1,0 +1,117 @@
+#!/bin/sh
+
+set -uex
+
+name=`basename $0`
+relation=${name%%-relation-*}
+event=${name##*-relation-}
+
+generate_osd_conf() {
+    new_osd_config=`mktemp /etc/ceph/.osd.conf.partial.XXXXXXXX`
+    myaddr=`unit-get private-address`
+    for unit in `relation-list` ; do
+        id=`echo $unit | cut -d/ -f2` 
+        if [ "`relation-get private-address $unit`" = "$myaddr" ] ; then
+            myid=$id
+        fi
+        cat >> $new_osd_config <<EOF
+
+[osd.$id]
+    host = `unit-get private-address`
+
+EOF
+    done
+
+    mkdir -p /mnt/osd$myid
+    swap_config /etc/ceph/osd.conf.partial $new_osd_config
+}
+
+generate_mds_conf() {
+    new_mds_config=`mktemp /etc/ceph/.mon.conf.partial.XXXXXX`
+    for unit in `relation-list` ; do
+        id=`echo $unit | cut -d/ -f2`
+        cat >> $new_mds_config <<EOF
+
+[mds.$id]
+    host=`relation-get private-address $unit`
+
+EOF
+    done
+    swap_config /etc/ceph/mds.conf.partial $new_mds_config
+}
+
+generate_mon_conf() {
+    new_mon_config=`mktemp /etc/ceph/.mon.conf.partial.XXXXXX`
+    for unit in `relation-list` ; do
+        id=`echo $unit | cut -d/ -f2`
+        cat >> $new_mon_config <<EOF
+
+[mon.$id]
+    host=`relation-get private-address $unit`
+    mon addr = `relation-get private-address $unit`:6789
+
+EOF
+    done
+    swap_config /etc/ceph/mon.conf.partial $new_mon_config
+}
+
+swap_config() {
+    old=$1
+    new=$2
+    [ -n "$old" ] || return
+    [ -n "$new" ] || return
+    [ ! -e $old ] || mv -f $old $old.last
+    mv $new $old
+}
+
+new_config=`mktemp /etc/ceph/.new-config.XXXXX`
+
+# If I am the "master", make sure we have .ssh/id_xxx keys for all slaves
+# relation-set key content
+
+journal_size=`config-get osd-journal-size`
+
+cat > $new_config <<EOF
+[global]
+    auth supported = cephx
+
+[mon]
+    mon data = /data/mon\$id
+
+[mds]
+    keyring = /data/keyring.\$name
+
+[osd]
+    osd data = /mnt/osd\$id
+    osd journal = /mnt/osd\$id/journal
+    osd journal size = $journal_size
+
+EOF
+
+case $relation in
+mds)
+    generate_mds_conf
+    ;;
+osd)
+    generate_osd_conf
+    ;;
+mon)
+    generate_mon_conf
+    ;;
+*)
+    juju-log -l ERROR invalid relation $relation called
+    ;;
+esac
+    
+
+for i in mon mds osd ; do
+    if [ -f /etc/ceph/$i.conf.partial ] ; then
+        cat /etc/ceph/$i.conf.partial >> $new_config
+    fi
+done
+
+swap_config /etc/ceph/ceph.conf $new_config
+
+service ceph status || service ceph start
+
+exit 0
