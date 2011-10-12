@@ -111,6 +111,11 @@ generate_mon_conf() {
             host=`relation-get hostname $unit`
             addr=`relation-get private-address $unit`
         fi
+        if echo $addr | grep "\d\.\d\.\d\.\d" ; then
+            echo $addr is already an ipv4 address
+        else
+            addr=`dig $addr +short`
+        fi
         cat >> $new_mon_config <<EOF
 
 [mon.$id]

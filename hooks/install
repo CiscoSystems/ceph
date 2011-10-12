@@ -2,4 +2,4 @@
 # Here do anything needed to install the service
 # i.e. apt-get install -y foo  or  bzr branch http://myserver/mycode /srv/webroot
 
-apt-get install -y ceph haveged openssh-client --no-install-recommends
+apt-get install -y ceph haveged openssh-client dnsutils --no-install-recommends
