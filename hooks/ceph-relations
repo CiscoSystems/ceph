@@ -42,6 +42,8 @@ ssh)
         exit 0
     fi
     ;;
+client)
+    ;;
 *)
     if [ -z "`relation-get hostname`" ] ; then
         juju-log "hostname not set yet"
@@ -272,5 +274,11 @@ chgrp www-data $new_config
 chmod g+r $new_config
 
 swap_config /etc/ceph/ceph.conf $new_config
+
+case $relation in
+client)
+    relation-set ceph-config="`base64 /etc/ceph/ceph.conf`"
+    ;;
+esac
 
 service ceph restart || juju-log "Service could not be started"

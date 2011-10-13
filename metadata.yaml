@@ -8,6 +8,8 @@ description: |
 provides:
   ceph-fs:
     interface: mount
+  client:
+    interface: ceph
 requires:
   ssh-client:
     interface: root-ssh
