@@ -79,6 +79,19 @@ EOF
     myid=`echo $JUJU_UNIT_NAME | cut -d/ -f2`
     mkdir -p /mnt/osd$myid
     swap_config /etc/ceph/osd.conf.partial $new_osd_config
+# XXX
+# The following is really hard to get right, so commented out for now.
+# We need to make sure the datadir has xattrs.. Probably better to
+# make an explicit mount once juju can model our block devs a little
+# more clearly.
+#    augtool <<EOF
+#    defnode mnt '/files/etc/fstab/*[file ="/mnt"]'
+#    ins opt before \$mnt/opt
+#    set \$mnt/opt[1] xattr_user
+#    save
+#EOF
+    # XXX We cannot change the mount options in an LXC contaienr.. *HRM*
+    [ -n "`which lxc-is-container`" ] || mount /mnt -o remount,xattr_user
 }
 
 generate_mds_conf() {
