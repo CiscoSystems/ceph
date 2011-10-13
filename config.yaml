@@ -10,3 +10,9 @@ options:
             Allow all nodes to ssh as root to all other nodes. This
             sounds a bit risky, but its needed to mkcephfs, so only
             turn it on while doing mkcephfs, then turn it back off.
+    rados-port:
+        type: string
+        default: 0
+        description: |
+            What port to listen for radosgw requests on. 0 means do
+            not setup a radosgw on this service.

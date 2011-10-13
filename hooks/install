@@ -6,5 +6,12 @@ apt-get install -y ceph \
         haveged \
         openssh-client \
         dnsutils \
-        radosgw
+        radosgw \
+        lighttpd \
         --no-install-recommends
+
+cat > /var/www/s3gw.fcgi <<EOF
+#!/bin/sh
+/usr/bin/radosgw -c /etc/ceph/ceph.conf
+EOF
+chmod +x /var/www/s3gw.fcgi

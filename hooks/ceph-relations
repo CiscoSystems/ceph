@@ -179,6 +179,44 @@ regen_ssh_config() {
     swap_config /root/.ssh/authorized_keys $new_keys
     set_permit_root_login yes
 }
+
+regen_rados_config() {
+    rados_port=`config-get rados-port`
+    if [ "$rados_port" = "0" ] ; then
+        service lighttpd stop || :
+        rm -f /etc/lighttpd/lighttpd.conf
+        return
+    fi
+    new_lighttpd=`mktemp /etc/lighttpd/.new.config.XXXXX`
+    cat > $new_lighttpd <<EOF
+server.modules              = (
+            "mod_access",
+            "mod_fastcgi",
+            "mod_accesslog",
+)
+
+server.port = `config-get rados-port`
+
+server.document-root       = "/var/www/"
+
+static-file.exclude-extensions = ( ".php", ".pl", ".fcgi" )
+
+debug.log-request-handling = "enable"
+
+fastcgi.debug = 1
+fastcgi.server = ( "/" =>
+    (( "socket" => "/tmp/php-fastcgi.socket",
+        "bin-path" => "/var/www/s3gw.fcgi",
+        "check-local" => "disable",
+        "max-procs" => 1,
+    ))
+  )
+server.reject-expect-100-with-417 = "disable"
+EOF
+    swap_config /etc/lighttpd/lighttpd.conf $new_lighttpd
+    service lighttpd stop || :
+    service lighttpd start
+}
     
 new_config=`mktemp /etc/ceph/.new-config.XXXXX`
 
@@ -188,9 +226,6 @@ new_config=`mktemp /etc/ceph/.new-config.XXXXX`
 journal_size=`config-get osd-journal-size`
 
 cat > $new_config <<EOF
-[global]
-    auth supported = cephx
-
 [mon]
     mon data = /mnt/mon\$id
 
@@ -225,12 +260,16 @@ mon)
 esac
     
 regen_ssh_config
+regen_rados_config
 
 for i in mon mds osd ; do
     if [ -f /etc/ceph/$i.conf.partial ] ; then
         cat /etc/ceph/$i.conf.partial >> $new_config
     fi
 done
+
+chgrp www-data $new_config
+chmod g+r $new_config
 
 swap_config /etc/ceph/ceph.conf $new_config
 
