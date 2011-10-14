@@ -5,7 +5,7 @@ options:
         description: Size of each node's OSD journal in Megabytes
     root-ssh:
         type: string
-        default: no
+        default: "no"
         description: |
             Allow all nodes to ssh as root to all other nodes. This
             sounds a bit risky, but its needed to mkcephfs, so only
@@ -16,3 +16,18 @@ options:
         description: |
             What port to listen for radosgw requests on. 0 means do
             not setup a radosgw on this service.
+    run-osd:
+        type: string
+        default: "yes"
+        description: |
+            Set to "yes" to run all members of this service as OSDs
+    run-mon:
+        type: string
+        default: "yes"
+        description: |
+            Set to "yes" to run all members of this service as monitors
+    run-mds:
+        type: string
+        default: "yes"
+        description: |
+            Set to "yes" to run all members of this service as metadata serverss
