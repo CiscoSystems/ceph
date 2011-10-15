@@ -5,7 +5,7 @@ options:
         description: Size of each node's OSD journal in Megabytes
     root-ssh:
         type: string
-        default: "no"
+        default: "yes"
         description: |
             Allow all nodes to ssh as root to all other nodes. This
             sounds a bit risky, but its needed to mkcephfs, so only

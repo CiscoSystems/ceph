@@ -43,8 +43,8 @@ swap_config() {
     if cmp --silent $old $new ; then
         return 1
     else
-        [ -n "$old" ] || return
-        [ -n "$new" ] || return
+        [ -n "$old" ] || return 0
+        [ -n "$new" ] || return 0
         [ ! -e $old ] || mv -f $old $old.last
         mv $new $old
     fi
@@ -61,7 +61,7 @@ append_config() {
 
 generate_osd_conf() {
     name=$1
-    additional=$2
+    additional=${2:-}
     new_osd_config=`mktemp /etc/ceph/.$name.conf.partial.XXXXXXXX`
     if [ -n "$additional" ] ; then
         id=${additional#*/}
@@ -75,7 +75,7 @@ generate_osd_conf() {
         done
     fi
 
-    swap_config /etc/ceph/$name.conf.partial $new_osd_config
+    swap_config /etc/ceph/$name.conf.partial $new_osd_config || :
     # XXX We cannot change the mount options in an LXC contaienr.. *HRM*
     [ -n "`which lxc-is-container`" ] || mount /mnt -o remount,xattr_user
 }
@@ -105,7 +105,7 @@ EOF
 
 generate_mds_conf() {
     name=$1
-    additional=$2
+    additional=${2:-}
     new_mds_config=`mktemp /etc/ceph/.$name.conf.partial.XXXXXX`
     if [ -n "$additional" ] ; then
         id=${additional#*/}
@@ -117,7 +117,7 @@ generate_mds_conf() {
             do_mds_template $id $host >> $new_mds_config
         done
     fi
-    swap_config /etc/ceph/$name.conf.partial $new_mds_config
+    swap_config /etc/ceph/$name.conf.partial $new_mds_config || :
 }
 
 do_mds_template() {
@@ -144,27 +144,21 @@ i_am_leader() {
     fi
 }
 
-have_monmap() {
-    if i_am_leader ; then
-        myid=${JUJU_UNIT_NAME#*/}
-        if [ ! -d /etc/ceph/prepared-monmap ] ; then
-            mkcephfs -c /etc/ceph/ceph.conf --prepare-monmap -d /etc/ceph/prepared-monmap
-        fi
-    else
-        if [ ! -d /etc/ceph/prepared-monmap ] ; then
-            return 1
-        fi
-    fi
-    return 0
+i_am_mon_leader() {
+    [ -f /etc/ceph/mon.leader ] && return 0
+    return 1
 }
 
 bootstrap_mon() {
     # Chicken and egg, need to make sure one mon is up
     [ ! -f /etc/ceph/mon.added ] || return 0
-    if ! (
-        mkcephfs --prepare-monmap -d /etc/ceph/prepared-monmap
-        mkcephfs --prepare-mon -d /etc/ceph/prepared-mon
-        mkcephfs --init-local-daemons mon -d /etc/ceph/prepared-mon
+    i_am_mon_leader || return 0
+    if  (
+        #
+        #mkcephfs --prepare-monmap -d /etc/ceph/prepared-monmap
+        #mkcephfs --prepare-mon -d /etc/ceph/prepared-mon
+        #mkcephfs --init-local-daemons mon -d /etc/ceph/prepared-mon
+        mkcephfs -a -c /etc/ceph/ceph.conf
         service ceph start
     ) ; then
         touch /etc/ceph/mon.added
@@ -178,12 +172,14 @@ add_mon() {
         ip=`relation-get private-address`
         ip=`network_address $ip`
         ceph mon add $id $ip:6789
-        rsync -av 
+        myid=${JUJU_UNIT_NAME#*/}
+        rsync -av /mnt/mon.$myid/ $ip:/mnt/mon.$id/
+        ssh $ip service ceph restart
     fi
 }
 
 init_osd() {
-    [ ! -f /etc/ceph/initialized.osd ] || return
+    [ ! -f /etc/ceph/initialized.osd ] || return 0
     if have_monmap ; then
         mkcephfs --init-local-daemons osd -d /etc/ceph/prepared-monmap
         touch /etc/ceph/initialized.osd
@@ -191,7 +187,7 @@ init_osd() {
 }
 
 init_mds() {
-    [ ! -f /etc/ceph/initialized.mds ] || return
+    [ ! -f /etc/ceph/initialized.mds ] || return 0
     if have_monmap ; then
         mkcephfs --init-local-daemons mds -d /etc/ceph/prepared-monmap
         touch /etc/ceph/initialized.mds
@@ -200,7 +196,7 @@ init_mds() {
 
 generate_mon_conf() {
     name=$1
-    additional=$2
+    additional=${2:-}
     new_mon_config=`mktemp /etc/ceph/.$name.conf.partial.XXXXXX`
     if [ -n "$additional" ] ; then
         myid=`echo $additional | cut -d/ -f2`
@@ -215,9 +211,12 @@ generate_mon_conf() {
             addr=`network_address $addr`
             do_mon_template $id $host $addr
         done
+        if i_am_leader ; then
+            touch /etc/ceph/mon.leader
+        fi
     fi
 
-    swap_config /etc/ceph/$name.conf.partial $new_mon_config
+    swap_config /etc/ceph/$name.conf.partial $new_mon_config || :
 }
 
 do_mon_template() {
@@ -255,9 +254,9 @@ regen_ssh_config() {
     if [ ! "$root_ssh" = "yes" ] ; then
         rm -f /root/.ssh/authorized_keys
         set_permit_root_login no
-        return
+        return 0
     fi
-    [ -d /etc/ceph/ssh-keys ] || return
+    [ -d /etc/ceph/ssh-keys ] || return 0
     mkdir -p /root/.ssh
     chmod 600 /root/.ssh
     new_keys=`mktemp /root/.ssh/.new_auth_keys.XXXXXX`
@@ -266,7 +265,7 @@ regen_ssh_config() {
     for key in `ls /etc/ceph/ssh-keys` ; do
         cat /etc/ceph/ssh-keys/$key >> $new_keys
     done
-    swap_config /root/.ssh/authorized_keys $new_keys
+    swap_config /root/.ssh/authorized_keys $new_keys || :
     set_permit_root_login yes
 }
 
@@ -275,7 +274,7 @@ regen_rados_config() {
     if [ "$rados_port" = "0" ] ; then
         service lighttpd stop || :
         rm -f /etc/lighttpd/lighttpd.conf
-        return
+        return 0
     fi
     new_lighttpd=`mktemp /etc/lighttpd/.new.config.XXXXX`
     cat > $new_lighttpd <<EOF
@@ -302,7 +301,7 @@ fastcgi.server = ( "/" =>
         -  )
 server.reject-expect-100-with-417 = "disable"
 EOF
-    swap_config /etc/lighttpd/lighttpd.conf $new_lighttpd
+    swap_config /etc/lighttpd/lighttpd.conf $new_lighttpd || :
     service lighttpd stop || :
     service lighttpd start
 }
