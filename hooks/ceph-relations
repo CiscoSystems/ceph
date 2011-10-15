@@ -71,26 +71,41 @@ EOF
 
 case $relation in
 config-changed)
+    run_mds && generate_mds_conf mds-local $JUJU_UNIT_NAME || :
+    run_osd && generate_osd_conf osd-local $JUJU_UNIT_NAME || :
+    run_mon && generate_mon_conf mon-local $JUJU_UNIT_NAME || :
     ;;
 ssh|ssh-remote)
     save_ssh_key
     ;;
 mds)
-    generate_mds_conf mds $JUJU_UNIT_NAME
+    generate_mds_conf mds
     ;;
 osd)
-    generate_osd_conf osd $JUJU_UNIT_NAME
+    generate_osd_conf osd
     ;;
 mon)
-    generate_mon_conf mon $JUJU_UNIT_NAME
+    generate_mon_conf mon
     ;;
 mds-remote)
+    if run_mds ; then
+        juju-log -l ERROR "Cannot relate mds to mds ring"
+        exit 1
+    fi
     generate_mds_conf mds-remote
     ;;
 osd-remote)
+    if run_osd ; then
+        juju-log -l ERROR "Cannot relate osd to osd ring"
+        exit 1
+    fi
     generate_osd_conf osd-remote
     ;;
 mon-remote)
+    if run_mon ; then
+        juju-log -l ERROR "Cannot relate mon to mon ring"
+        exit 1
+    fi
     generate_mon_conf mon-remote
     ;;
 *)
@@ -101,22 +116,35 @@ esac
 regen_ssh_config
 regen_rados_config
 
-[ ! "`config-get run-osd`" = "yes" ] || append_config /etc/ceph/osd.conf.partial $new_config
-[ ! "`config-get run-mds`" = "yes" ] || append_config /etc/ceph/mds.conf.partial $new_config
-[ ! "`config-get run-mon`" = "yes" ] || append_config /etc/ceph/mon.conf.partial $new_config
+run_osd && append_config /etc/ceph/osd.conf.partial $new_config || :
+run_mds && append_config /etc/ceph/mds.conf.partial $new_config || :
+run_mon && append_config /etc/ceph/mon.conf.partial $new_config || :
 [ ! -f /etc/ceph/mds-remote.conf.partial ] || append_config /etc/ceph/mds-remote.conf.partial $new_config
 [ ! -f /etc/ceph/osd-remote.conf.partial ] || append_config /etc/ceph/osd-remote.conf.partial $new_config
 [ ! -f /etc/ceph/mon-remote.conf.partial ] || append_config /etc/ceph/mon-remote.conf.partial $new_config
+[ ! -f /etc/ceph/mds-local.conf.partial ] || append_config /etc/ceph/mds-local.conf.partial $new_config
+[ ! -f /etc/ceph/osd-local.conf.partial ] || append_config /etc/ceph/osd-local.conf.partial $new_config
+[ ! -f /etc/ceph/mon-local.conf.partial ] || append_config /etc/ceph/mon-local.conf.partial $new_config
 
 chgrp www-data $new_config
 chmod g+r $new_config
 
-swap_config /etc/ceph/ceph.conf $new_config
+if swap_config /etc/ceph/ceph.conf $new_config ; then
 
-case $relation in
-client)
-    relation-set ceph-config="`base64 /etc/ceph/ceph.conf`"
-    ;;
-esac
+    case $relation in
+    client)
+        relation-set ceph-config="`base64 /etc/ceph/ceph.conf`"
+        ;;
+    esac
 
-service ceph restart || juju-log "Service could not be started"
+    service ceph restart || juju-log "Service could not be started"
+fi
+
+if run_mon ; then
+    bootstrap_mon
+    case $relation in
+    mon|mon-remote)
+        add_mon
+        ;;
+    esac
+fi

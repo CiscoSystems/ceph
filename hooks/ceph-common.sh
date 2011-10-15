@@ -7,13 +7,48 @@ send_ssh_key() {
     relation-set ssh-key="`cat /root/.ssh/id_rsa.pub`"
 }
 
+network_address() {
+    addr=$1
+    if echo $addr | grep "\d\.\d\.\d\.\d" ; then
+        echo $addr
+    else
+        dig $addr +short|head -n 1
+    fi
+}
+
+run_any() {
+    name=$1
+    if [ "`config-get run-$name`" = "yes" ] ; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+run_mds() {
+    run_any mds
+}
+
+run_osd() {
+    run_any osd
+}
+
+run_mon() {
+    run_any mon
+}
+
 swap_config() {
     old=$1
     new=$2
-    [ -n "$old" ] || return
-    [ -n "$new" ] || return
-    [ ! -e $old ] || mv -f $old $old.last
-    mv $new $old
+    if cmp --silent $old $new ; then
+        return 1
+    else
+        [ -n "$old" ] || return
+        [ -n "$new" ] || return
+        [ ! -e $old ] || mv -f $old $old.last
+        mv $new $old
+    fi
+    return 0
 }
 
 append_config() {
@@ -28,26 +63,23 @@ generate_osd_conf() {
     name=$1
     additional=$2
     new_osd_config=`mktemp /etc/ceph/.$name.conf.partial.XXXXXXXX`
-    for unit in $additional `relation-list` ; do
-        id=`echo $unit | cut -d/ -f2` 
-        if [ "$unit" = "$additional" ] ; then
-            host=$HOSTNAME
-        else
+    if [ -n "$additional" ] ; then
+        id=${additional#*/}
+        do_osd_template $id $HOSTNAME >> $new_osd_config
+        mkdir -p /mnt/osd$id
+    else
+        for unit in $additional `relation-list` ; do
+            id=${unit#*/}
             host=`relation-get hostname $unit`
-        fi
-        cat >> $new_osd_config <<EOF
-
-[osd.$id]
-    host = $host
-
-EOF
-    done
-
-    if [ -n "$additonal" ] ; then
-        myid=`echo $additional | cut -d/ -f2`
-        mkdir -p /mnt/osd$myid
+            do_osd_template $id $host >> $new_osd_config
+        done
     fi
+
     swap_config /etc/ceph/$name.conf.partial $new_osd_config
+    # XXX We cannot change the mount options in an LXC contaienr.. *HRM*
+    [ -n "`which lxc-is-container`" ] || mount /mnt -o remount,xattr_user
+}
+
 # XXX
 # The following is really hard to get right, so commented out for now.
 # We need to make sure the datadir has xattrs.. Probably better to
@@ -59,29 +91,44 @@ EOF
 #    set \$mnt/opt[1] xattr_user
 #    save
 #EOF
-    # XXX We cannot change the mount options in an LXC contaienr.. *HRM*
-    [ -n "`which lxc-is-container`" ] || mount /mnt -o remount,xattr_user
+
+do_osd_template() {
+    osd_id=$1
+    osd_host=$2
+        cat <<EOF
+
+[osd.$osd_id]
+    host = $osd_host
+
+EOF
 }
 
 generate_mds_conf() {
     name=$1
     additional=$2
     new_mds_config=`mktemp /etc/ceph/.$name.conf.partial.XXXXXX`
-    for unit in $additional `relation-list` ; do
-        id=`echo $unit | cut -d/ -f2`
-        if [ "$unit" = "$additional" ] ; then
-            host=$HOSTNAME
-        else
+    if [ -n "$additional" ] ; then
+        id=${additional#*/}
+        do_mds_template $id $HOSTNAME >> $new_mds_config
+    else
+        for unit in $additional `relation-list` ; do
+            id=${unit#*/}
             host=`relation-get hostname $unit`
-        fi
-        cat >> $new_mds_config <<EOF
+            do_mds_template $id $host >> $new_mds_config
+        done
+    fi
+    swap_config /etc/ceph/$name.conf.partial $new_mds_config
+}
 
-[mds.$id]
-    host=$host
+do_mds_template() {
+    mds_id=$1
+    mds_host=$2
+        cat <<EOF
+
+[mds.$mds_id]
+    host=$mds_host
 
 EOF
-    done
-    swap_config /etc/ceph/$name.conf.partial $new_mds_config
 }
 
 i_am_leader() {
@@ -111,34 +158,28 @@ have_monmap() {
     return 0
 }
 
-network_address() {
-    addr=$1
-    if echo $addr | grep "\d\.\d\.\d\.\d" ; then
-        echo $addr
-    else
-        dig $addr +short|head -n 1
-    fi
-}
-
-add_mon() {
+bootstrap_mon() {
     # Chicken and egg, need to make sure one mon is up
-    [ ! -f /etc/ceph/mon.added ] || return
-    if i_am_leader ; then
+    [ ! -f /etc/ceph/mon.added ] || return 0
+    if ! (
         mkcephfs --prepare-monmap -d /etc/ceph/prepared-monmap
         mkcephfs --prepare-mon -d /etc/ceph/prepared-mon
         mkcephfs --init-local-daemons mon -d /etc/ceph/prepared-mon
         service ceph start
+    ) ; then
+        touch /etc/ceph/mon.added
     fi
-    myid=${JUJU_UNIT_NAME#*/}
-    myip=`unit-get private-address`
-    myip=`network_address $myip`
-    ceph mon add $myid $myip:6789
-    if ! i_am_leader ; then
-        leader_host=`get_leader_host`
-        leader_id=`get_leader_id`
-        rsync -av $leader_host:/mnt/mon.$leader_id/ /mnt/mon.$myid
+    return 0
+}
+
+add_mon() {
+    if i_am_leader ; then
+        id=${JUJU_REMOTE_UNIT#*/}
+        ip=`relation-get private-address`
+        ip=`network_address $ip`
+        ceph mon add $id $ip:6789
+        rsync -av 
     fi
-    touch /etc/ceph/mon.added
 }
 
 init_osd() {
@@ -161,32 +202,35 @@ generate_mon_conf() {
     name=$1
     additional=$2
     new_mon_config=`mktemp /etc/ceph/.$name.conf.partial.XXXXXX`
-    for unit in $additional `relation-list` ; do
-        id=`echo $unit | cut -d/ -f2`
-        if [ "$unit" = "$additional" ] ; then
-            host=$HOSTNAME
-            addr=`unit-get private-address`
-        else
+    if [ -n "$additional" ] ; then
+        myid=`echo $additional | cut -d/ -f2`
+        addr=`unit-get private-address`
+        do_mon_template $myid $HOSTNAME $addr >> $new_mon_config
+        mkdir -p /mnt/mon$myid
+    else
+        for unit in `relation-list` ; do
+            id=${unit#*/}
             host=`relation-get hostname $unit`
             addr=`relation-get private-address $unit`
-        fi
-        if echo $addr | grep "\d\.\d\.\d\.\d" ; then
-            echo $addr is already an ipv4 address
-        else
-            addr=`dig $addr +short`
-        fi
-        cat >> $new_mon_config <<EOF
+            addr=`network_address $addr`
+            do_mon_template $id $host $addr
+        done
+    fi
 
-[mon.$id]
-    host=$host
-    mon addr = $addr
+    swap_config /etc/ceph/$name.conf.partial $new_mon_config
+}
+
+do_mon_template() {
+    mon_id=$1
+    mon_host=$2
+    mon_addr=$3
+    cat <<EOF
+
+[mon.$mon_id]
+    host=$mon_host
+    mon addr = $mon_addr
 
 EOF
-    done
-
-    myid=`echo $JUJU_UNIT_NAME | cut -d/ -f2`
-    mkdir -p /mnt/mon$myid
-    swap_config /etc/ceph/$name.conf.partial $new_mon_config
 }
 
 save_ssh_key() {
