@@ -76,13 +76,22 @@ ssh|ssh-remote)
     save_ssh_key
     ;;
 mds)
-    generate_mds_conf
+    generate_mds_conf mds $JUJU_UNIT_NAME
     ;;
 osd)
-    generate_osd_conf
+    generate_osd_conf osd $JUJU_UNIT_NAME
     ;;
 mon)
-    generate_mon_conf
+    generate_mon_conf mon $JUJU_UNIT_NAME
+    ;;
+mds-remote)
+    generate_mds_conf mds-remote
+    ;;
+osd-remote)
+    generate_osd_conf osd-remote
+    ;;
+mon-remote)
+    generate_mon_conf mon-remote
     ;;
 *)
     juju-log -l ERROR invalid relation $relation called
@@ -95,6 +104,9 @@ regen_rados_config
 [ ! "`config-get run-osd`" = "yes" ] || append_config /etc/ceph/osd.conf.partial $new_config
 [ ! "`config-get run-mds`" = "yes" ] || append_config /etc/ceph/mds.conf.partial $new_config
 [ ! "`config-get run-mon`" = "yes" ] || append_config /etc/ceph/mon.conf.partial $new_config
+[ ! -f /etc/ceph/mds-remote.conf.partial ] || append_config /etc/ceph/mds-remote.conf.partial $new_config
+[ ! -f /etc/ceph/osd-remote.conf.partial ] || append_config /etc/ceph/osd-remote.conf.partial $new_config
+[ ! -f /etc/ceph/mon-remote.conf.partial ] || append_config /etc/ceph/mon-remote.conf.partial $new_config
 
 chgrp www-data $new_config
 chmod g+r $new_config

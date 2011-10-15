@@ -13,9 +13,21 @@ provides:
 requires:
   ssh-client:
     interface: root-ssh
+  osd-remote:
+    interface: ceph-osd
+  mds-remote:
+    interface: ceph-mds
+  mon-remote:
+    interface: ceph-mon
 provides:
   ssh-remote:
     interface: root-ssh
+  osd-server:
+    interface: ceph-osd
+  mds-server:
+    interface: ceph-mds
+  mon-server:
+    interface: ceph-mon
 peers:
   ssh:
     interface: root-ssh

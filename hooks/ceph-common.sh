@@ -25,10 +25,12 @@ append_config() {
 }
 
 generate_osd_conf() {
-    new_osd_config=`mktemp /etc/ceph/.osd.conf.partial.XXXXXXXX`
-    for unit in $JUJU_UNIT_NAME `relation-list` ; do
+    name=$1
+    additional=$2
+    new_osd_config=`mktemp /etc/ceph/.$name.conf.partial.XXXXXXXX`
+    for unit in $additional `relation-list` ; do
         id=`echo $unit | cut -d/ -f2` 
-        if [ "$unit" = "$JUJU_UNIT_NAME" ] ; then
+        if [ "$unit" = "$additional" ] ; then
             host=$HOSTNAME
         else
             host=`relation-get hostname $unit`
@@ -41,9 +43,11 @@ generate_osd_conf() {
 EOF
     done
 
-    myid=`echo $JUJU_UNIT_NAME | cut -d/ -f2`
-    mkdir -p /mnt/osd$myid
-    swap_config /etc/ceph/osd.conf.partial $new_osd_config
+    if [ -n "$additonal" ] ; then
+        myid=`echo $additional | cut -d/ -f2`
+        mkdir -p /mnt/osd$myid
+    fi
+    swap_config /etc/ceph/$name.conf.partial $new_osd_config
 # XXX
 # The following is really hard to get right, so commented out for now.
 # We need to make sure the datadir has xattrs.. Probably better to
@@ -60,10 +64,12 @@ EOF
 }
 
 generate_mds_conf() {
-    new_mds_config=`mktemp /etc/ceph/.mon.conf.partial.XXXXXX`
-    for unit in $JUJU_UNIT_NAME `relation-list` ; do
+    name=$1
+    additional=$2
+    new_mds_config=`mktemp /etc/ceph/.$name.conf.partial.XXXXXX`
+    for unit in $additional `relation-list` ; do
         id=`echo $unit | cut -d/ -f2`
-        if [ "$unit" = "$JUJU_UNIT_NAME" ] ; then
+        if [ "$unit" = "$additional" ] ; then
             host=$HOSTNAME
         else
             host=`relation-get hostname $unit`
@@ -75,14 +81,89 @@ generate_mds_conf() {
 
 EOF
     done
-    swap_config /etc/ceph/mds.conf.partial $new_mds_config
+    swap_config /etc/ceph/$name.conf.partial $new_mds_config
+}
+
+i_am_leader() {
+    units_file=`mktemp /tmp/units.XXXXXXX`
+    relation-list > $units_file
+    echo $JUJU_UNIT_NAME >> $units_file
+    leader=`sort $units_file|head -n 1`
+    rm -f $units_file
+    if [ "$JUJU_UNIT_NAME" = "$leader" ] ; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+have_monmap() {
+    if i_am_leader ; then
+        myid=${JUJU_UNIT_NAME#*/}
+        if [ ! -d /etc/ceph/prepared-monmap ] ; then
+            mkcephfs -c /etc/ceph/ceph.conf --prepare-monmap -d /etc/ceph/prepared-monmap
+        fi
+    else
+        if [ ! -d /etc/ceph/prepared-monmap ] ; then
+            return 1
+        fi
+    fi
+    return 0
+}
+
+network_address() {
+    addr=$1
+    if echo $addr | grep "\d\.\d\.\d\.\d" ; then
+        echo $addr
+    else
+        dig $addr +short|head -n 1
+    fi
+}
+
+add_mon() {
+    # Chicken and egg, need to make sure one mon is up
+    [ ! -f /etc/ceph/mon.added ] || return
+    if i_am_leader ; then
+        mkcephfs --prepare-monmap -d /etc/ceph/prepared-monmap
+        mkcephfs --prepare-mon -d /etc/ceph/prepared-mon
+        mkcephfs --init-local-daemons mon -d /etc/ceph/prepared-mon
+        service ceph start
+    fi
+    myid=${JUJU_UNIT_NAME#*/}
+    myip=`unit-get private-address`
+    myip=`network_address $myip`
+    ceph mon add $myid $myip:6789
+    if ! i_am_leader ; then
+        leader_host=`get_leader_host`
+        leader_id=`get_leader_id`
+        rsync -av $leader_host:/mnt/mon.$leader_id/ /mnt/mon.$myid
+    fi
+    touch /etc/ceph/mon.added
+}
+
+init_osd() {
+    [ ! -f /etc/ceph/initialized.osd ] || return
+    if have_monmap ; then
+        mkcephfs --init-local-daemons osd -d /etc/ceph/prepared-monmap
+        touch /etc/ceph/initialized.osd
+    fi
+}
+
+init_mds() {
+    [ ! -f /etc/ceph/initialized.mds ] || return
+    if have_monmap ; then
+        mkcephfs --init-local-daemons mds -d /etc/ceph/prepared-monmap
+        touch /etc/ceph/initialized.mds
+    fi
 }
 
 generate_mon_conf() {
-    new_mon_config=`mktemp /etc/ceph/.mon.conf.partial.XXXXXX`
-    for unit in $JUJU_UNIT_NAME `relation-list` ; do
+    name=$1
+    additional=$2
+    new_mon_config=`mktemp /etc/ceph/.$name.conf.partial.XXXXXX`
+    for unit in $additional `relation-list` ; do
         id=`echo $unit | cut -d/ -f2`
-        if [ "$unit" = "$JUJU_UNIT_NAME" ] ; then
+        if [ "$unit" = "$additional" ] ; then
             host=$HOSTNAME
             addr=`unit-get private-address`
         else
@@ -105,7 +186,7 @@ EOF
 
     myid=`echo $JUJU_UNIT_NAME | cut -d/ -f2`
     mkdir -p /mnt/mon$myid
-    swap_config /etc/ceph/mon.conf.partial $new_mon_config
+    swap_config /etc/ceph/$name.conf.partial $new_mon_config
 }
 
 save_ssh_key() {
