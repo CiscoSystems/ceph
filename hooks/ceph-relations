@@ -148,7 +148,7 @@ if run_mon ; then
         myid=${JUJU_UNIT_NAME#*/}
         if [ -d "/mnt/mon$myid" ] ; then
             service ceph start mon || :
-            relation-set added=1
+            relation-set ready=1
         fi
         ;;
     esac

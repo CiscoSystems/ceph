@@ -168,14 +168,28 @@ bootstrap_mon() {
     return 0
 }
 
+mon_in_monmap () {
+    id=$1
+    address=$2
+    myid=${JUJU_UNIT_NAME#*/}
+    # XXX this feels like a hack, no ceph mon list?
+    mondir=/mnt/mon$myid
+    last=`cat $mondir/monmap/last_consumed`
+    if monmaptool --print $mondir/monmap/$last | grep -q "$address:[0-9/]* mon.$id$" ; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 add_mon() {
     myid=${JUJU_UNIT_NAME#*/}
     if i_am_leader ; then
-        [ -z "`relation-get added`" ] || return 0
+        [ -z "`relation-get ready`" ] || return 0
         id=${JUJU_REMOTE_UNIT#*/}
         ip=`relation-get private-address`
         ip=`network_address $ip`
-        ceph mon add $id $ip:6789
+        mon_in_monmap $id $ip || ceph mon add $id $ip:6789
         mon_tar=`mktemp /tmp/mon.XXXXXXX.tgz`
         tar -czvf $mon_tar -C /mnt mon$myid
         relation-set mon-tar="`base64 -w0 $mon_tar`"
