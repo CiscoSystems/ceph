@@ -170,11 +170,11 @@ bootstrap_mon() {
 
 mon_in_monmap () {
     id=$1
-    address=$2
+    address=${2:-" "}
     myid=${JUJU_UNIT_NAME#*/}
     # XXX this feels like a hack, no ceph mon list?
     mondir=/mnt/mon$myid
-    last=`cat $mondir/monmap/last_consumed`
+    last=`cat $mondir/monmap/last_committed`
     if monmaptool --print $mondir/monmap/$last | grep -q "$address:[0-9/]* mon.$id$" ; then
         return 0
     else
@@ -204,6 +204,17 @@ add_mon() {
         tar -C /mnt --transform "s,^mon$leader_id,mon$myid," -zxf $mon_tar 
         rm -f $mon_tar
         service ceph start mon
+    fi
+}
+
+remove_mon() {
+    if i_am_leader ; then
+        id=${JUJU_REMOTE_UNIT#*/}
+        if mon_in_monmap $id ; then
+            ceph mon remove $id
+        else
+            juju-log "$id was not in monmap"
+        fi
     fi
 }
 

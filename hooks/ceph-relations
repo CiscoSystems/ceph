@@ -41,10 +41,15 @@ ssh)
 client)
     ;;
 *)
-    if [ -z "`relation-get hostname`" ] ; then
-        juju-log "hostname not set yet"
-        exit 0
-    fi
+    case $event in
+    departed|broken)
+        ;;
+    *)
+        if [ -z "`relation-get hostname`" ] ; then
+            juju-log "hostname not set yet"
+            exit 0
+        fi
+    esac
     ;;
 esac
 
@@ -144,12 +149,18 @@ if run_mon ; then
     bootstrap_mon
     case $relation in
     mon|mon-remote)
-        add_mon
-        myid=${JUJU_UNIT_NAME#*/}
-        if [ -d "/mnt/mon$myid" ] ; then
-            service ceph start mon || :
-            relation-set ready=1
-        fi
-        ;;
+        case $event in
+        joined|changed)
+            add_mon
+            myid=${JUJU_UNIT_NAME#*/}
+            if [ -d "/mnt/mon$myid" ] ; then
+                service ceph start mon || :
+                relation-set ready=1
+            fi
+            ;;
+        departed|broken)
+            remove_mon
+            ;;
+        esac
     esac
 fi
