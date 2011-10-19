@@ -69,8 +69,9 @@ generate_osd_conf() {
         mkdir -p /mnt/osd$id
     else
         for unit in $additional `relation-list` ; do
-            id=${unit#*/}
             host=`relation-get hostname $unit`
+            [ -n "$host" ] || continue
+            id=${unit#*/}
             do_osd_template $id $host >> $new_osd_config
         done
     fi
@@ -135,9 +136,10 @@ i_am_leader() {
     units_file=`mktemp /tmp/units.XXXXXXX`
     relation-list > $units_file
     echo $JUJU_UNIT_NAME >> $units_file
-    leader=`sort $units_file|head -n 1`
+    leader=`cut -d/ -f2 $units_file|sort -n |head -n 1`
+    myid=${JUJU_UNIT_NAME#*/}
     rm -f $units_file
-    if [ "$JUJU_UNIT_NAME" = "$leader" ] ; then
+    if [ "$myid" = "$leader" ] ; then
         return 0
     else
         return 1
@@ -167,14 +169,27 @@ bootstrap_mon() {
 }
 
 add_mon() {
+    myid=${JUJU_UNIT_NAME#*/}
     if i_am_leader ; then
+        [ -z "`relation-get added`" ] || return 0
         id=${JUJU_REMOTE_UNIT#*/}
         ip=`relation-get private-address`
         ip=`network_address $ip`
         ceph mon add $id $ip:6789
-        myid=${JUJU_UNIT_NAME#*/}
-        rsync -av /mnt/mon.$myid/ $ip:/mnt/mon.$id/
-        ssh $ip service ceph restart
+        mon_tar=`mktemp /tmp/mon.XXXXXXX.tgz`
+        tar -czvf $mon_tar -C /mnt mon$myid
+        relation-set mon-tar="`base64 -w0 $mon_tar`"
+        relation-set mon-leader-id="$myid"
+        rm -f $mon_tar
+    else
+        mon_tar=`mktemp /tmp/mon.XXXXXXX.tgz`
+        relation-get mon-tar | base64 --decode > $mon_tar
+        leader_id=`relation-get mon-leader-id`
+        ftype=`file -b --mime-type $mon_tar`
+        [ "$ftype" = "application/x-gzip" ] || return 0
+        tar -C /mnt --transform "s,^mon$leader_id,mon$myid," -zxf $mon_tar 
+        rm -f $mon_tar
+        service ceph start mon
     fi
 }
 
@@ -205,6 +220,8 @@ generate_mon_conf() {
         mkdir -p /mnt/mon$myid
     else
         for unit in `relation-list` ; do
+            added=`relation-get added $unit`
+            [ -n "$added" ] || continue
             id=${unit#*/}
             host=`relation-get hostname $unit`
             addr=`relation-get private-address $unit`

@@ -8,6 +8,7 @@ apt-get install -y ceph \
         dnsutils \
         radosgw \
         lighttpd \
+        file \
         --no-install-recommends
 
 cat > /var/www/s3gw.fcgi <<EOF

@@ -145,6 +145,11 @@ if run_mon ; then
     case $relation in
     mon|mon-remote)
         add_mon
+        myid=${JUJU_UNIT_NAME#*/}
+        if [ -d "/mnt/mon$myid" ] ; then
+            service ceph start mon || :
+            relation-set added=1
+        fi
         ;;
     esac
 fi
