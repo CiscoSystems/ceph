@@ -152,15 +152,22 @@ if run_mon ; then
         case $event in
         joined|changed)
             add_mon
-            myid=${JUJU_UNIT_NAME#*/}
-            if [ -d "/mnt/mon$myid" ] ; then
-                service ceph start mon || :
-                relation-set ready=1
-            fi
             ;;
         departed|broken)
             remove_mon
             ;;
         esac
     esac
+    start_mon
+fi
+
+# Just keep trying these till they succeeed, since
+# our SSH keys may or may not be distributed everywhere yet
+if [ -f /etc/ceph/rsyncs ] ; then
+    retries=`mktemp /etc/ceph/rsyncs.retries.XXXXXX`
+    sort -u /etc/ceph/rsyncs | ( while read rsync_line ; do
+        rsync -a $rsync_line || echo $rsync_line >> $retries
+    done)
+    rm /etc/ceph/rsyncs
+    [ -z "`cat $retries`" ] || mv -f $retries /etc/ceph/rsyncs
 fi

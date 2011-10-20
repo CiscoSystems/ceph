@@ -1,5 +1,7 @@
 #!/bin/sh
 
+myid=${JUJU_UNIT_NAME#*/}
+
 send_ssh_key() {
     if [ ! -f "/root/.ssh/id_rsa" ] ; then
         ssh-keygen -q -N '' -t rsa -b 2048 -f /root/.ssh/id_rsa
@@ -137,7 +139,6 @@ i_am_leader() {
     relation-list > $units_file
     echo $JUJU_UNIT_NAME >> $units_file
     leader=`cut -d/ -f2 $units_file|sort -n |head -n 1`
-    myid=${JUJU_UNIT_NAME#*/}
     rm -f $units_file
     if [ "$myid" = "$leader" ] ; then
         return 0
@@ -171,7 +172,6 @@ bootstrap_mon() {
 mon_in_monmap () {
     id=$1
     address=${2:-" "}
-    myid=${JUJU_UNIT_NAME#*/}
     # XXX this feels like a hack, no ceph mon list?
     mondir=/mnt/mon$myid
     last=`cat $mondir/monmap/last_committed`
@@ -182,28 +182,26 @@ mon_in_monmap () {
     fi
 }
 
+start_mon() {
+    if mon_in_monmap $myid ; then
+        service ceph start mon
+    else
+        juju-log "Waiting for monmap rsync from master."
+    fi
+}
+
 add_mon() {
-    myid=${JUJU_UNIT_NAME#*/}
     if i_am_leader ; then
         [ -z "`relation-get ready`" ] || return 0
         id=${JUJU_REMOTE_UNIT#*/}
         ip=`relation-get private-address`
         ip=`network_address $ip`
         mon_in_monmap $id $ip || ceph mon add $id $ip:6789
-        mon_tar=`mktemp /tmp/mon.XXXXXXX.tgz`
-        tar -czvf $mon_tar -C /mnt mon$myid
-        relation-set mon-tar="`base64 -w0 $mon_tar`"
-        relation-set mon-leader-id="$myid"
-        rm -f $mon_tar
+        echo "/mnt/mon$myid/ $ip:/mnt/mon$id/" >> /etc/ceph/rsyncs
+        relation-set rsync-initiated="`date`" # kicks off the changed hook below on remote unit
     else
-        mon_tar=`mktemp /tmp/mon.XXXXXXX.tgz`
-        relation-get mon-tar | base64 --decode > $mon_tar
-        leader_id=`relation-get mon-leader-id`
-        ftype=`file -b --mime-type $mon_tar`
-        [ "$ftype" = "application/x-gzip" ] || return 0
-        tar -C /mnt --transform "s,^mon$leader_id,mon$myid," -zxf $mon_tar 
-        rm -f $mon_tar
-        service ceph start mon
+        mon_in_monmap $myid || return 0
+        relation-set ready=1
     fi
 }
 
@@ -239,10 +237,10 @@ generate_mon_conf() {
     additional=${2:-}
     new_mon_config=`mktemp /etc/ceph/.$name.conf.partial.XXXXXX`
     if [ -n "$additional" ] ; then
-        myid=`echo $additional | cut -d/ -f2`
+        additional_id=${additional#*/}
         addr=`unit-get private-address`
-        do_mon_template $myid $HOSTNAME $addr >> $new_mon_config
-        mkdir -p /mnt/mon$myid
+        do_mon_template $additional_id $HOSTNAME $addr >> $new_mon_config
+        mkdir -p /mnt/mon$additional_id
     else
         for unit in `relation-list` ; do
             added=`relation-get added $unit`
@@ -283,19 +281,28 @@ save_ssh_key() {
     fi
 }
 
-set_permit_root_login() {
-    new_value=$1
-    sed -i -e "s/^PermitRootLogin .*$/PermitRootLogin $new_value/" /etc/ssh/sshd_config
+set_ssh_config() {
+    file=$1
+    param=$2
+    new_value=$3
+    if grep -q "^$param " /etc/ssh/${file}_config ; then
+        sed -i -e "s/^$param .*$/$param $new_value/" /etc/ssh/${file}_config
+    else
+        echo "$param $new_value" >> /etc/ssh/${file}_config
+    fi
     # Make sure we didn't hose the configs
-    /usr/sbin/sshd -t
-    service ssh reload
+    if [ "$file" = "sshd" ] ; then
+        /usr/sbin/sshd -t
+        service ssh reload
+    fi
 }
 
 regen_ssh_config() {
     root_ssh=`config-get root-ssh`
     if [ ! "$root_ssh" = "yes" ] ; then
         rm -f /root/.ssh/authorized_keys
-        set_permit_root_login no
+        set_ssh_config sshd PermitRootLogin no
+        set_ssh_config ssh StrictHostKeyChecking ask
         return 0
     fi
     [ -d /etc/ceph/ssh-keys ] || return 0
@@ -308,7 +315,8 @@ regen_ssh_config() {
         cat /etc/ceph/ssh-keys/$key >> $new_keys
     done
     swap_config /root/.ssh/authorized_keys $new_keys || :
-    set_permit_root_login yes
+    set_ssh_config sshd PermitRootLogin yes
+    set_ssh_config ssh StrictHostKeyChecking no
 }
 
 regen_rados_config() {

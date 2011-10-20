@@ -5,25 +5,27 @@ run all components of CEPH currently (mds, osd, and mon).  This means
 you should not try to use the cluster until it has reached an odd number
 of machines.
 
-Once the units are all deployed, use
+Because I haven't worked out how to do mkcephfs properly:
 
-juju set name-of-service root-ssh=yes
-
-Then ssh to any of the service units and run
+First deploy on one node. SSH to it, and run:
 
 sudo mkcephfs -a -c /etc/ceph/ceph.conf
 
-It should create a ceph filesystem with data stored on each node in
-/mnt. On EC2 instances, this is automatically a large ephemeral drive,
+It should create a ceph filesystem with data stored on /mnt.  On EC2
+instances, this is automatically a large ephemeral drive with ext4,
 and should perform reasonably well.
 
-After you are done, you can improve security by turning off the root ssh,
-which is only used for mkcephfs, with:
+After this, add-unit to grow/shrink the cluster. Use the 'run-xxx'
+flags and remote-(mds|osd|mon) to relate one service with another.
+
+When you are not adding units, its probably best to disable the root
+ssh with:
 
 juju set name-of-service root-ssh=no
 
 Once done, one should be able to mount the ceph filesystem using any of
 the service unit IP's.
 
-XXX at the time of this writing, mounting stalls out on my local LXC
-containers that I am using for prototyping.
+After you are done, you can improve security by turning off the root ssh,
+which is only used for mkcephfs, with:
+
