@@ -161,6 +161,18 @@ if run_mon ; then
     start_mon
 fi
 
+if run_osd ; then
+    case $relation in
+    osd|osd-remote)
+        case $event in
+        joined|changed)
+            add_osd
+            ;;
+        departed|broken)
+            ;;
+        esac
+    esac
+fi
 # Just keep trying these till they succeeed, since
 # our SSH keys may or may not be distributed everywhere yet
 if [ -f /etc/ceph/rsyncs ] ; then

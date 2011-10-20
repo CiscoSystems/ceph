@@ -152,6 +152,7 @@ i_am_mon_leader() {
     return 1
 }
 
+
 bootstrap_mon() {
     # Chicken and egg, need to make sure one mon is up
     [ ! -f /etc/ceph/mon.added ] || return 0
@@ -202,6 +203,27 @@ add_mon() {
     else
         mon_in_monmap $myid || return 0
         relation-set ready=1
+    fi
+}
+
+add_osd() {
+    # Assumes leader has already have mkcephfs run on it to bootstrap
+    if i_am_leader ; then
+        [ -z "`relation-get ready`" ] || return 0
+        monmap=`mktemp /tmp/monmap.XXXXXXX`
+        ip=`relation-get private-address`
+        ip=`network_address $ip`
+        ceph mon getmap -o $monmap
+        echo "$monmap $ip:$monmap" >> /etc/ceph/rsyncs
+        relation-set monmap-filename="$monmap"
+    else
+        [ ! -f /etc/ceph/osd.formatted ] || return 0
+        monmap=`relation-get monmap-filename`
+        [ -n "$monmap" ] || return 0
+        [ -f "$monmap" ] || return 0
+        cosd -c /etc/ceph/ceph.conf -i $myid --mkfs --monmap $monmap
+        service ceph start osd$myid
+        touch /etc/ceph/osd.formatted
     fi
 }
 
