@@ -1,6 +1,6 @@
 options:
     osd-journal-size:
-        type: string
+        type: int
         default: 512
         description: Size of each node's OSD journal in Megabytes
     root-ssh:
@@ -11,7 +11,7 @@ options:
             sounds a bit risky, but its needed to mkcephfs, so only
             turn it on while doing mkcephfs, then turn it back off.
     rados-port:
-        type: string
+        type: int
         default: 0
         description: |
             What port to listen for radosgw requests on. 0 means do
